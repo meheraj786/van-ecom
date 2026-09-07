@@ -30,6 +30,12 @@ Build the application:
 pnpm build
 ```
 
+Production start command:
+
+```bash
+pnpm start:prod
+```
+
 Validate and generate Prisma:
 
 ```bash

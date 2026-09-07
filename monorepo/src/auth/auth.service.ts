@@ -157,22 +157,34 @@ export class AuthService {
       },
     };
   }
-  async getMe(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        avatar: true,
-        provider: true,
-        createdAt: true,
-      },
-    });
-    if (!user) {
-      throw new UnauthorizedException("User not found");
+  async getMe(token?: string) {
+    if (!token) {
+      return null;
     }
-    return user;
+
+    try {
+      const cleanToken = token.replace(/^Bearer\s+/i, "").trim();
+      const payload = this.jwt.verify(cleanToken);
+      if (!payload || !payload.userId) {
+        return null;
+      }
+
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          avatar: true,
+          provider: true,
+          createdAt: true,
+        },
+      });
+
+      return user || null;
+    } catch (error) {
+      return null;
+    }
   }
 }

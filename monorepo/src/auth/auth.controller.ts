@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { RegisterVendorDto } from "./dto/register-vendor.dto";
@@ -42,7 +50,8 @@ export class AuthController {
     return this.authService.loginVendor(dto);
   }
   @Get("auth/me")
-  getMe(@Req() req: any) {
-    return this.authService.getMe(req.user.userId);
+  getMe(@Headers("authorization") authHeader?: string, @Req() req?: any) {
+    const token = authHeader || req?.cookies?.token || req?.cookies?.jwt;
+    return this.authService.getMe(token);
   }
 }

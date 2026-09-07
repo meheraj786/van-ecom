@@ -42,7 +42,7 @@ export class AuthController {
     return this.authService.loginVendor(dto);
   }
   @UseGuards(JwtAuthGuard)
-  @Get("me")
+  @Get("auth/me")
   getMe(@Req() req: any) {
     return this.authService.getMe(req.user.userId);
   }

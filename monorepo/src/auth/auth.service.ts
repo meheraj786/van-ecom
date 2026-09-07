@@ -91,20 +91,39 @@ export class AuthService {
   }
 
   async registerVendor(dto: RegisterVendorDto) {
-    const existing = await this.prisma.user.findUnique({
+    const existingVendor = await this.prisma.user.findFirst({
+      where: {
+        role: {
+          not: "USER",
+        },
+      },
+    });
+
+    if (existingVendor) {
+      throw new BadRequestException(
+        "A vendor account already exists. Only one vendor is allowed for this single-vendor store.",
+      );
+    }
+
+    const existingEmail = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-    if (existing)
-      throw new BadRequestException("Vendor account already exists");
+    if (existingEmail) {
+      throw new BadRequestException(
+        "An account with this email already exists",
+      );
+    }
+
     const vendor = await this.prisma.user.create({
       data: {
         email: dto.email,
         name: dto.name,
         password: await bcrypt.hash(dto.password, 10),
-        role: dto.role || "STAFF",
+        role: dto.role || "ADMIN",
         provider: "local",
       },
     });
+
     return {
       message: "Vendor account registered successfully",
       vendorId: vendor.id,

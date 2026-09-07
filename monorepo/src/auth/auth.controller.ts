@@ -41,7 +41,6 @@ export class AuthController {
   loginVendor(@Body() dto: LoginDto) {
     return this.authService.loginVendor(dto);
   }
-  @UseGuards(JwtAuthGuard)
   @Get("auth/me")
   getMe(@Req() req: any) {
     return this.authService.getMe(req.user.userId);

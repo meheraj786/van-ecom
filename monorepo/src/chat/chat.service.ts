@@ -10,6 +10,30 @@ import { SendMessageDto } from "./dto/chat.dto";
 export class ChatService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async ensureSenderUserExists(
+    senderId: string,
+    senderName: string,
+    senderRole: string,
+  ) {
+    const emailBase = senderId.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const email = `${emailBase || "chat-user"}@chat.local`;
+
+    await this.prisma.user.upsert({
+      where: { id: senderId },
+      update: {
+        name: senderName || senderId,
+        role: senderRole || "USER",
+        email,
+      },
+      create: {
+        id: senderId,
+        email,
+        name: senderName || senderId,
+        role: senderRole || "USER",
+      },
+    });
+  }
+
   async getOrCreateConversation(userA: string, userB: string) {
     if (userA === userB)
       throw new BadRequestException("Cannot start conversation with yourself");
@@ -62,6 +86,9 @@ export class ChatService {
       where: { id: dto.conversationId },
     });
     if (!conversation) throw new NotFoundException("Conversation not found");
+
+    await this.ensureSenderUserExists(senderId, senderName, senderRole);
+
     const message = await this.prisma.chatMessage.create({
       data: {
         conversationId: dto.conversationId,

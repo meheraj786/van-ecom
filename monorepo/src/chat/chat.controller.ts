@@ -1,29 +1,49 @@
-import { Controller, Get, Post, Body, Param, Query, Req } from '@nestjs/common';
-import { ChatService } from './chat.service';
-import { SendMessageDto } from './dto/chat.dto';
+import { Controller, Get, Post, Body, Param, Query, Req } from "@nestjs/common";
+import { ChatService } from "./chat.service";
+import { SendMessageDto } from "./dto/chat.dto";
 
-@Controller('chat')
+@Controller("chat")
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
-  @Post('conversation')
+  @Post("conversation")
   async getOrCreateConversation(
-    @Body('userA') userA: string,
-    @Body('userB') userB: string,
+    @Body()
+    body: {
+      userA?: string;
+      userB?: string;
+      targetUserId?: string;
+      senderId?: string;
+    },
   ) {
+    const userA = body.userA ?? body.targetUserId;
+    const userB = body.userB ?? body.senderId;
+
+    if (!userA || !userB) {
+      throw new Error("Missing conversation participants");
+    }
+
     return this.chatService.getOrCreateConversation(userA, userB);
   }
 
-  @Get('conversations/:userId')
-  async getUserConversations(@Param('userId') userId: string) {
+  @Get("conversations")
+  async getUserConversationsByQuery(@Query("userId") userId?: string) {
+    if (!userId) {
+      return [];
+    }
     return this.chatService.getUserConversations(userId);
   }
 
-  @Get('messages/:conversationId')
+  @Get("conversations/:userId")
+  async getUserConversations(@Param("userId") userId: string) {
+    return this.chatService.getUserConversations(userId);
+  }
+
+  @Get("messages/:conversationId")
   async getConversationMessages(
-    @Param('conversationId') conversationId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Param("conversationId") conversationId: string,
+    @Query("page") page?: number,
+    @Query("limit") limit?: number,
   ) {
     return this.chatService.getConversationMessages(
       conversationId,
@@ -32,7 +52,7 @@ export class ChatController {
     );
   }
 
-  @Post('message')
+  @Post("message")
   async sendMessage(
     @Req() req: any,
     @Body()
@@ -51,10 +71,10 @@ export class ChatController {
     );
   }
 
-  @Post('read')
+  @Post("read")
   async markRead(
-    @Body('conversationId') conversationId: string,
-    @Body('userId') userId: string,
+    @Body("conversationId") conversationId: string,
+    @Body("userId") userId: string,
   ) {
     await this.chatService.markAsRead(conversationId, userId);
     return { success: true };

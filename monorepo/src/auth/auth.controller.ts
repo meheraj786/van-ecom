@@ -39,6 +39,10 @@ export class AuthController {
   ) {
     return this.authService.googleAuth(data);
   }
+  @Post("auth/google/verify")
+  googleVerify(@Body("credential") credential: string) {
+    return this.authService.verifyGoogleCredential(credential);
+  }
 
   @Post("auth/vendor/register")
   registerVendor(@Body() dto: RegisterVendorDto) {

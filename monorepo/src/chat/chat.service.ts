@@ -49,11 +49,55 @@ export class ChatService {
     });
   }
 
-  getUserConversations(userId: string) {
-    return this.prisma.conversation.findMany({
+  async getUserConversations(userId: string) {
+    const conversations = await this.prisma.conversation.findMany({
       where: { participants: { has: userId } },
       orderBy: { updatedAt: "desc" },
     });
+
+    const participantIds = [
+      ...new Set(
+        conversations.flatMap((conversation) => conversation.participants),
+      ),
+    ];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: participantIds } },
+      select: {
+        id: true,
+        name: true,
+        customer: { select: { phone: true } },
+      },
+    });
+    const detailsById = new Map(
+      users.map((user) => [
+        user.id,
+        { name: user.name, phone: user.customer?.phone },
+      ]),
+    );
+
+    return conversations.map((conversation) => ({
+      ...conversation,
+      participantDetails: Object.fromEntries(
+        conversation.participants.map((participant) => {
+          const guestParts = participant.split("_");
+          const isGuest = participant.startsWith("GUEST_");
+          return [
+            participant,
+            {
+              name:
+                detailsById.get(participant)?.name ||
+                (isGuest ? "Guest" : participant),
+              ...(detailsById.get(participant)?.phone ||
+              (isGuest && guestParts[1])
+                ? {
+                    phone: detailsById.get(participant)?.phone || guestParts[1],
+                  }
+                : {}),
+            },
+          ];
+        }),
+      ),
+    }));
   }
 
   async getConversationMessages(conversationId: string, page = 1, limit = 50) {

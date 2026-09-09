@@ -9,6 +9,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { RegisterVendorDto } from "./dto/register-vendor.dto";
 import { LoginDto } from "./dto/login.dto";
+import axios from "axios";
 
 @Injectable()
 export class AuthService {
@@ -88,6 +89,38 @@ export class AuthService {
       token,
       user: { id: user.id, email: user.email, name: user.name },
     };
+  }
+
+  async verifyGoogleCredential(credential: string) {
+    if (!credential) {
+      throw new BadRequestException("Google credential is required");
+    }
+
+    try {
+      const { data } = await axios.get<{
+        sub?: string;
+        email?: string;
+        name?: string;
+        picture?: string;
+        email_verified?: string;
+      }>("https://oauth2.googleapis.com/tokeninfo", {
+        params: { id_token: credential },
+      });
+
+      if (!data.email || data.email_verified !== "true") {
+        throw new BadRequestException("Invalid Google credential");
+      }
+
+      return this.googleAuth({
+        googleId: data.sub || data.email,
+        email: data.email,
+        name: data.name || data.email.split("@")[0],
+        avatar: data.picture,
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new UnauthorizedException("Invalid Google credential");
+    }
   }
 
   async registerVendor(dto: RegisterVendorDto) {

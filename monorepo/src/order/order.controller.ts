@@ -8,7 +8,10 @@ import {
   Put,
   Query,
   BadRequestException,
+  Req,
+  UnauthorizedException,
 } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
 import { OrderService } from "./order.service";
 import { SSLCommerzService } from "./sslcommerz.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -23,11 +26,39 @@ export class OrderController {
   constructor(
     private readonly orderService: OrderService,
     private readonly sslcommerzService: SSLCommerzService,
+    private readonly jwt: JwtService,
   ) {}
 
+  private getAuthPayload(req: any) {
+    const authorization = req?.headers?.authorization || "";
+    const token =
+      authorization.replace(/^Bearer\s+/i, "") ||
+      req?.cookies?.token ||
+      req?.cookies?.jwt;
+
+    if (!token) return null;
+
+    try {
+      return this.jwt.verify<{ userId?: string; sub?: string; role?: string }>(
+        token,
+      );
+    } catch {
+      return null;
+    }
+  }
+
   @Post()
-  createOrder(@Query("userId") userId: string, @Body() dto: CreateOrderDto) {
-    return this.orderService.createOrder(userId || undefined, dto);
+  createOrder(
+    @Req() req: any,
+    @Query("userId") userId: string,
+    @Body() dto: CreateOrderDto,
+  ) {
+    const auth = this.getAuthPayload(req);
+    const authenticatedUserId = auth?.userId || auth?.sub;
+    return this.orderService.createOrder(
+      authenticatedUserId || userId || undefined,
+      dto,
+    );
   }
 
   @Post("payment/sslcommerz/success")
@@ -87,10 +118,20 @@ export class OrderController {
 
   @Get()
   getOrders(
+    @Req() req: any,
     @Query("userId") userId: string,
     @Query() query: PaginationQueryDto,
   ) {
-    return this.orderService.getOrders(userId || undefined, query);
+    const auth = this.getAuthPayload(req);
+    const isAdmin = auth?.role === "ADMIN" || auth?.role === "STAFF";
+    const authenticatedUserId = auth?.userId || auth?.sub;
+    if (!isAdmin && !authenticatedUserId) {
+      throw new UnauthorizedException("Login is required to view orders");
+    }
+
+    const effectiveUserId = isAdmin ? undefined : authenticatedUserId;
+
+    return this.orderService.getOrders(effectiveUserId, query);
   }
 
   @Get("single/:id")

@@ -174,11 +174,16 @@ export class OrderController {
 
   @Post("coupon/validate")
   validateCoupon(
+    @Req() req: any,
     @Query("userId") userId: string,
     @Body() dto: ValidateCouponDto,
   ) {
+    const auth = this.getAuthPayload(req);
+    const authenticatedUserId = auth?.userId || auth?.sub;
+    const effectiveUserId = authenticatedUserId || userId;
+
     return this.orderService.validateCouponForUser(
-      userId,
+      effectiveUserId,
       dto.code,
       dto.items as any,
     );

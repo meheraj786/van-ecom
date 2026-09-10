@@ -3,11 +3,11 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateReviewDto } from './dto/create-review.dto';
-import { UpdateReviewDto } from './dto/update-review.dto';
-import { PaginationQueryDto } from '../product/dto/pagination-query.dto';
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { CreateReviewDto } from "./dto/create-review.dto";
+import { UpdateReviewDto } from "./dto/update-review.dto";
+import { PaginationQueryDto } from "../product/dto/pagination-query.dto";
 
 @Injectable()
 export class ReviewService {
@@ -30,25 +30,33 @@ export class ReviewService {
   }
 
   async createReview(userId: string, userName: string, dto: CreateReviewDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    if (!user) {
+      throw new BadRequestException("User does not exist");
+    }
+
     const product = await this.prisma.product.findUnique({
       where: { id: dto.productId },
     });
     if (!product) {
-      throw new BadRequestException('Product does not exist');
+      throw new BadRequestException("Product does not exist");
     }
 
     const existingReview = await this.prisma.review.findFirst({
       where: { productId: dto.productId, userId },
     });
     if (existingReview) {
-      throw new BadRequestException('You have already reviewed this product');
+      throw new BadRequestException("You have already reviewed this product");
     }
 
     const review = await this.prisma.review.create({
       data: {
         productId: dto.productId,
         userId,
-        userName,
+        userName: user.name || userName || "Customer",
         rating: dto.rating,
         comment: dto.comment,
       },
@@ -78,7 +86,7 @@ export class ReviewService {
         },
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
     ]);
 
@@ -104,7 +112,7 @@ export class ReviewService {
         where: { productId },
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
     ]);
 
@@ -140,7 +148,7 @@ export class ReviewService {
         },
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
     ]);
 
@@ -160,12 +168,12 @@ export class ReviewService {
       where: { id },
     });
     if (!review) {
-      throw new NotFoundException('Review not found');
+      throw new NotFoundException("Review not found");
     }
 
     if (review.userId !== userId) {
       throw new ForbiddenException(
-        'You are not authorized to update this review',
+        "You are not authorized to update this review",
       );
     }
 
@@ -183,12 +191,12 @@ export class ReviewService {
       where: { id },
     });
     if (!review) {
-      throw new NotFoundException('Review not found');
+      throw new NotFoundException("Review not found");
     }
 
-    if (review.userId !== userId && userRole !== 'ADMIN') {
+    if (review.userId !== userId && userRole !== "ADMIN") {
       throw new ForbiddenException(
-        'You are not authorized to delete this review',
+        "You are not authorized to delete this review",
       );
     }
 
@@ -197,6 +205,6 @@ export class ReviewService {
     });
 
     await this.recalculateProductRating(review.productId);
-    return { message: 'Review deleted successfully' };
+    return { message: "Review deleted successfully" };
   }
 }

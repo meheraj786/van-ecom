@@ -22,139 +22,126 @@ export class OrderService {
   ) {}
 
   async createOrder(userId: string | undefined, dto: CreateOrderDto) {
-    const {
-      divisionId,
-      couponCode,
-      billing,
-      items = [],
-      paymentMethod = "COD",
-    } = dto;
+    let validDbUserId: string | null = null;
+    const candidateUserId =
+      userId &&
+      userId !== "GUEST" &&
+      userId !== "undefined" &&
+      userId !== "null"
+        ? userId.trim()
+        : null;
 
-    const division = await this.prisma.division.findUnique({
-      where: { id: divisionId },
-    });
-
-    if (!division) {
-      throw new BadRequestException("Invalid division selected");
-    }
-
-    let subtotal = 0;
-    const orderItemsData: any[] = [];
-
-    for (const item of items) {
-      const price = Number(item.price || 0);
-      const qty = Number(item.quantity || 1);
-      subtotal += price * qty;
-
-      orderItemsData.push({
-        productId: item.productId,
-        variantId: item.variantId,
-        quantity: qty,
-        price: price,
-        variantSnapshot: {
-          productName: item.name || item.productName || "Product Item",
-          productSlug: item.slug || item.productSlug || "",
-          image: item.image || "",
-          sku: item.sku || "",
-          options: item.options || {},
-        },
+    if (candidateUserId) {
+      const userInDb = await this.prisma.user.findUnique({
+        where: { id: candidateUserId },
+        select: { id: true },
       });
-    }
-
-    let discountAmount = 0;
-    if (couponCode) {
-      const cleanCouponCode = couponCode.toUpperCase();
-      const coupon = await this.prisma.coupon.findUnique({
-        where: { code: cleanCouponCode },
-      });
-
-      if (coupon && coupon.isActive) {
-        if (coupon.discountType === "PERCENTAGE") {
-          discountAmount = (subtotal * coupon.discountValue) / 100;
-          if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
-            discountAmount = coupon.maxDiscount;
-          }
-        } else {
-          discountAmount = coupon.discountValue;
-        }
+      if (userInDb) {
+        validDbUserId = userInDb.id;
       }
     }
 
-    const deliveryCharge = division.deliveryCharge;
+    let appliedCoupon: any = null;
+    let discountAmount = 0;
+
+    if (dto.couponCode) {
+      const validationRes = await this.validateCouponForUser(
+        validDbUserId || undefined,
+        dto.couponCode,
+        dto.items as any,
+      );
+      discountAmount = validationRes.data.discountAmount;
+      appliedCoupon = await this.prisma.coupon.findUnique({
+        where: { code: dto.couponCode.trim().toUpperCase() },
+      });
+    }
+
+    const division = await this.prisma.division.findUnique({
+      where: { id: dto.divisionId },
+    });
+
+    if (!division) {
+      throw new BadRequestException("Invalid delivery division selected");
+    }
+
+    const deliveryCharge = Number(division.deliveryCharge || 0);
+    const subtotal = (dto.items || []).reduce((sum, item) => {
+      return sum + Number(item.price || 0) * Number(item.quantity || 1);
+    }, 0);
+
     const totalAmount = Math.max(0, subtotal - discountAmount + deliveryCharge);
     const transactionId = `TXN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const customerPhone = billing.phone.trim();
-    const linkedUser = userId
-      ? await this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true },
-        })
-      : null;
-
-    await this.prisma.customer.upsert({
-      where: { phone: customerPhone },
-      create: {
-        phone: customerPhone,
-        name: billing.fullName,
-        email: billing.email,
-        address: billing.address,
-        isRegistered: Boolean(linkedUser),
-        ...(linkedUser ? { userId: linkedUser.id } : {}),
-      },
-      update: {
-        name: billing.fullName,
-        email: billing.email,
-        address: billing.address,
-      },
-    });
-
-    const order = await this.prisma.order.create({
-      data: {
-        customerId: userId || "GUEST",
-        divisionId,
-        couponCode: couponCode ? couponCode.toUpperCase() : null,
-        discountAmount,
-        totalAmount,
-        status: "PENDING",
-        paymentMethod,
-        paymentStatus: paymentMethod === "COD" ? "UNPAID" : "PENDING",
-        transactionId,
-        customerName: billing.fullName,
-        customerEmail: billing.email,
-        customerPhone,
-        shippingAddress: billing.address,
-        city: billing.city,
-        zipCode: billing.zipCode || null,
-        items: {
-          create: orderItemsData as any,
+    const order = await this.prisma.$transaction(async (tx) => {
+      const createdOrder = await tx.order.create({
+        data: {
+          userId: validDbUserId,
+          customerId: dto.customerId || validDbUserId || "GUEST",
+          customerName: dto.billing.fullName,
+          customerEmail: dto.billing.email,
+          customerPhone: dto.billing.phone,
+          shippingAddress: dto.billing.address,
+          city: dto.billing.city,
+          zipCode: dto.billing.zipCode,
+          totalAmount: totalAmount,
+          discountAmount: discountAmount,
+          couponCode: appliedCoupon ? appliedCoupon.code : null,
+          couponId: appliedCoupon ? appliedCoupon.id : null,
+          divisionId: dto.divisionId,
+          paymentMethod: dto.paymentMethod || "COD",
+          paymentStatus: "UNPAID",
+          transactionId: transactionId,
+          items: {
+            create: dto.items.map((item) => ({
+              productId: item.productId,
+              variantId: item.variantId,
+              quantity: item.quantity,
+              price: item.price,
+              variantSnapshot: {
+                name: item.name,
+                image: item.image,
+                sku: item.sku,
+                options: item.options,
+              },
+            })),
+          },
         },
-      },
-      include: {
-        items: true,
-        division: true,
-      },
-    });
+        include: {
+          items: true,
+        },
+      });
 
-    await this.inventoryService.deductMultipleFifoStocks(
-      items.map((item) => ({
-        variantId: item.variantId,
-        quantity: Number(item.quantity || 1),
-      })),
-    );
+      if (appliedCoupon) {
+        await tx.coupon.update({
+          where: { id: appliedCoupon.id },
+          data: { usedCount: { increment: 1 } },
+        });
+
+        if (validDbUserId) {
+          await tx.couponUsage.create({
+            data: {
+              couponId: appliedCoupon.id,
+              userId: validDbUserId,
+              orderId: createdOrder.id,
+            },
+          });
+        }
+      }
+
+      return createdOrder;
+    });
 
     let gatewayUrl: string | null = null;
-    if (paymentMethod === "SSLCOMMERZ") {
+    if (dto.paymentMethod === "SSLCOMMERZ") {
       gatewayUrl = await this.sslcommerzService.initPayment({
-        total_amount: Number(totalAmount),
+        total_amount: totalAmount,
         tran_id: transactionId,
-        cus_name: billing.fullName,
-        cus_email: billing.email,
-        cus_phone: billing.phone,
-        cus_add1: billing.address,
-        cus_city: billing.city,
-        cus_postcode: billing.zipCode || "1000",
-        cus_country: billing.country || "Bangladesh",
+        cus_name: dto.billing.fullName,
+        cus_email: dto.billing.email,
+        cus_phone: dto.billing.phone,
+        cus_add1: dto.billing.address,
+        cus_city: dto.billing.city,
+        cus_postcode: dto.billing.zipCode,
       });
     }
 
@@ -297,139 +284,159 @@ export class OrderService {
     });
   }
 
-async validateCouponForUser(
-  userId: string | undefined,
-  code: string,
-  items: Array<{ productId: string; variantId: string; quantity: number; price?: number }>,
-) {
-  const cleanCode = (code || "").trim().toUpperCase();
-  if (!cleanCode) {
-    throw new BadRequestException("Coupon code is required");
-  }
-
-  const coupon = await this.prisma.coupon.findUnique({
-    where: { code: cleanCode },
-    include: {
-      products: true,
-      categories: true,
-    },
-  });
-
-  if (!coupon || !coupon.isActive) {
-    throw new BadRequestException("Coupon is invalid or inactive");
-  }
-
-  const now = new Date();
-  if (coupon.startsAt && now < new Date(coupon.startsAt)) {
-    throw new BadRequestException("Coupon is not active yet");
-  }
-
-  if (coupon.expiresAt && now > new Date(coupon.expiresAt)) {
-    throw new BadRequestException("Coupon has expired");
-  }
-
-  if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
-    throw new BadRequestException("Coupon usage limit has been reached");
-  }
-
-  const normalizedUserId =
-    userId && userId !== "GUEST" && userId !== "undefined" && userId !== "null"
-      ? userId
-      : null;
-
-  if (coupon.perUserLimit && coupon.perUserLimit > 0) {
-    if (!normalizedUserId) {
-      throw new BadRequestException("Please log in to use this coupon");
+  async validateCouponForUser(
+    userId: string | undefined,
+    code: string,
+    items: Array<{
+      productId: string;
+      variantId: string;
+      quantity: number;
+      price?: number;
+    }>,
+  ) {
+    const cleanCode = (code || "").trim().toUpperCase();
+    if (!cleanCode) {
+      throw new BadRequestException("Coupon code is required");
     }
 
-    const userUsageCount = await this.prisma.couponUsage.count({
-      where: {
-        couponId: coupon.id,
-        userId: normalizedUserId,
+    const coupon = await this.prisma.coupon.findUnique({
+      where: { code: cleanCode },
+      include: {
+        products: true,
+        categories: true,
       },
     });
 
-    if (userUsageCount >= coupon.perUserLimit) {
+    if (!coupon || !coupon.isActive) {
+      throw new BadRequestException("Coupon is invalid or inactive");
+    }
+
+    const now = new Date();
+    if (coupon.startsAt && now < new Date(coupon.startsAt)) {
+      throw new BadRequestException("Coupon is not active yet");
+    }
+
+    if (coupon.expiresAt && now > new Date(coupon.expiresAt)) {
+      throw new BadRequestException("Coupon has expired");
+    }
+
+    if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
+      throw new BadRequestException("Coupon usage limit has been reached");
+    }
+
+    const normalizedUserId =
+      userId &&
+      userId !== "GUEST" &&
+      userId !== "undefined" &&
+      userId !== "null" &&
+      userId.trim() !== ""
+        ? userId.trim()
+        : null;
+
+    if (coupon.perUserLimit && coupon.perUserLimit > 0) {
+      if (!normalizedUserId) {
+        throw new BadRequestException("Please log in to use this coupon");
+      }
+
+      const [usageCount, orderCount] = await Promise.all([
+        this.prisma.couponUsage.count({
+          where: {
+            couponId: coupon.id,
+            userId: normalizedUserId,
+          },
+        }),
+        this.prisma.order.count({
+          where: {
+            couponId: coupon.id,
+            userId: normalizedUserId,
+            status: { not: "CANCELLED" },
+          },
+        }),
+      ]);
+
+      const totalUserUsage = Math.max(usageCount, orderCount);
+
+      if (totalUserUsage >= coupon.perUserLimit) {
+        throw new BadRequestException(
+          `You have already used this coupon maximum (${coupon.perUserLimit}) time(s)`,
+        );
+      }
+    }
+
+    const cartItems = items || [];
+    let subtotal = 0;
+    let eligibleSubtotal = 0;
+
+    for (const item of cartItems) {
+      const itemPrice = Number(item.price || 0);
+      const qty = Number(item.quantity || 1);
+      const lineTotal = itemPrice * qty;
+      subtotal += lineTotal;
+
+      if (coupon.scope === "ALL") {
+        eligibleSubtotal += lineTotal;
+      } else if (coupon.scope === "PRODUCTS") {
+        const isEligibleProduct = coupon.products.some(
+          (p) => p.productId === item.productId,
+        );
+        if (isEligibleProduct) {
+          eligibleSubtotal += lineTotal;
+        }
+      } else if (coupon.scope === "CATEGORIES") {
+        const productCategories = await this.prisma.productCategory.findMany({
+          where: { productId: item.productId },
+          select: { categoryId: true },
+        });
+        const productCategoryIds = productCategories.map((pc) => pc.categoryId);
+        const isEligibleCategory = coupon.categories.some((c) =>
+          productCategoryIds.includes(c.categoryId),
+        );
+        if (isEligibleCategory) {
+          eligibleSubtotal += lineTotal;
+        }
+      }
+    }
+
+    if (coupon.minOrderValue && subtotal < coupon.minOrderValue) {
       throw new BadRequestException(
-        `You have reached the maximum usage limit (${coupon.perUserLimit}) for this coupon`,
+        `Minimum order value of ৳${coupon.minOrderValue} is required to apply this coupon`,
       );
     }
-  }
 
-  const cartItems = items || [];
-  let subtotal = 0;
-  let eligibleSubtotal = 0;
-
-  for (const item of cartItems) {
-    const itemPrice = Number(item.price || 0);
-    const qty = Number(item.quantity || 1);
-    const lineTotal = itemPrice * qty;
-    subtotal += lineTotal;
-
-    if (coupon.scope === "ALL") {
-      eligibleSubtotal += lineTotal;
-    } else if (coupon.scope === "PRODUCTS") {
-      const isEligibleProduct = coupon.products.some(
-        (p) => p.productId === item.productId,
+    if (eligibleSubtotal <= 0) {
+      throw new BadRequestException(
+        "None of the items in your cart are eligible for this coupon",
       );
-      if (isEligibleProduct) {
-        eligibleSubtotal += lineTotal;
+    }
+
+    let discountAmount = 0;
+    if (coupon.discountType === "PERCENTAGE") {
+      discountAmount = (eligibleSubtotal * coupon.discountValue) / 100;
+      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
+        discountAmount = coupon.maxDiscount;
       }
-    } else if (coupon.scope === "CATEGORIES") {
-      const productCategories = await this.prisma.productCategory.findMany({
-        where: { productId: item.productId },
-        select: { categoryId: true },
-      });
-      const productCategoryIds = productCategories.map((pc) => pc.categoryId);
-      const isEligibleCategory = coupon.categories.some((c) =>
-        productCategoryIds.includes(c.categoryId),
-      );
-      if (isEligibleCategory) {
-        eligibleSubtotal += lineTotal;
-      }
+    } else {
+      discountAmount = Math.min(coupon.discountValue, eligibleSubtotal);
     }
+
+    discountAmount = Math.min(discountAmount, subtotal);
+
+    return {
+      statusCode: 200,
+      success: true,
+      message: "Coupon applied successfully",
+      data: {
+        code: coupon.code,
+        subtotal,
+        eligibleSubtotal,
+        discountAmount,
+        totalAmount: Math.max(0, subtotal - discountAmount),
+        discountType: coupon.discountType as "PERCENTAGE" | "FIXED",
+        discountValue: coupon.discountValue,
+        isValid: true,
+      },
+    };
   }
-
-  if (coupon.minOrderValue && subtotal < coupon.minOrderValue) {
-    throw new BadRequestException(
-      `Minimum order value of ৳${coupon.minOrderValue} is required to apply this coupon`,
-    );
-  }
-
-  if (eligibleSubtotal <= 0) {
-    throw new BadRequestException(
-      "None of the items in your cart are eligible for this coupon",
-    );
-  }
-
-  let discountAmount = 0;
-  if (coupon.discountType === "PERCENTAGE") {
-    discountAmount = (eligibleSubtotal * coupon.discountValue) / 100;
-    if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
-      discountAmount = coupon.maxDiscount;
-    }
-  } else {
-    discountAmount = Math.min(coupon.discountValue, eligibleSubtotal);
-  }
-
-  discountAmount = Math.min(discountAmount, subtotal);
-
-  return {
-    statusCode: 200,
-    success: true,
-    message: "Coupon applied successfully",
-    data: {
-      code: coupon.code,
-      subtotal,
-      eligibleSubtotal,
-      discountAmount,
-      totalAmount: Math.max(0, subtotal - discountAmount),
-      discountType: coupon.discountType as "PERCENTAGE" | "FIXED",
-      discountValue: coupon.discountValue,
-      isValid: true,
-    },
-  };
-}
 
   async createCoupon(dto: CreateCouponDto) {
     const existing = await this.prisma.coupon.findUnique({

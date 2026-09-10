@@ -41,9 +41,12 @@ export class OrderController {
     if (!token) return null;
 
     try {
-      return this.jwt.verify<{ userId?: string; sub?: string; role?: string }>(
-        token,
-      );
+      return this.jwt.verify<{
+        id?: string;
+        userId?: string;
+        sub?: string;
+        role?: string;
+      }>(token);
     } catch {
       return null;
     }
@@ -56,9 +59,9 @@ export class OrderController {
     @Body() dto: CreateOrderDto,
   ) {
     const auth = this.getAuthPayload(req);
-    const authenticatedUserId = auth?.userId || auth?.sub;
+    const authenticatedUserId = auth?.id || auth?.userId || auth?.sub;
     return this.orderService.createOrder(
-      authenticatedUserId || userId || undefined,
+      authenticatedUserId || userId || dto.customerId || undefined,
       dto,
     );
   }
@@ -179,7 +182,7 @@ export class OrderController {
     @Body() dto: ValidateCouponDto,
   ) {
     const auth = this.getAuthPayload(req);
-    const authenticatedUserId = auth?.userId || auth?.sub;
+    const authenticatedUserId = auth?.id || auth?.userId || auth?.sub;
     const effectiveUserId = authenticatedUserId || userId;
 
     return this.orderService.validateCouponForUser(

@@ -84,6 +84,31 @@ export class OrderService {
     const totalAmount = Math.max(0, subtotal - discountAmount + deliveryCharge);
     const transactionId = `TXN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    const customerPhone = billing.phone.trim();
+    const linkedUser = userId
+      ? await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        })
+      : null;
+
+    await this.prisma.customer.upsert({
+      where: { phone: customerPhone },
+      create: {
+        phone: customerPhone,
+        name: billing.fullName,
+        email: billing.email,
+        address: billing.address,
+        isRegistered: Boolean(linkedUser),
+        ...(linkedUser ? { userId: linkedUser.id } : {}),
+      },
+      update: {
+        name: billing.fullName,
+        email: billing.email,
+        address: billing.address,
+      },
+    });
+
     const order = await this.prisma.order.create({
       data: {
         customerId: userId || "GUEST",
@@ -97,7 +122,7 @@ export class OrderService {
         transactionId,
         customerName: billing.fullName,
         customerEmail: billing.email,
-        customerPhone: billing.phone,
+        customerPhone,
         shippingAddress: billing.address,
         city: billing.city,
         zipCode: billing.zipCode || null,

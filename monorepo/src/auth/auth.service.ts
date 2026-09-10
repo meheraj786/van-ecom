@@ -174,6 +174,9 @@ export class AuthService {
     ) {
       throw new UnauthorizedException("Invalid credentials");
     }
+    if (vendor.role !== "ADMIN" && vendor.role !== "STAFF") {
+      throw new UnauthorizedException("Administrative access is required");
+    }
     const token = this.jwt.sign({
       userId: vendor.id,
       email: vendor.email,

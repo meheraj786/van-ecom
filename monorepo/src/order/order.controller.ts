@@ -9,9 +9,11 @@ import {
   Query,
   BadRequestException,
   Req,
+  Res,
   UnauthorizedException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import type { Response } from "express";
 import { OrderService } from "./order.service";
 import { SSLCommerzService } from "./sslcommerz.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -65,22 +67,32 @@ export class OrderController {
   async paymentSuccess(
     @Body() body: SSLCommerzPaymentDetails,
     @Query("tran_id") tran_id: string,
+    @Res() res: Response,
   ) {
     const transactionId = tran_id || body?.tran_id;
     const val_id = body?.val_id;
+    const frontendUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.FRONTEND_BASE_URL ||
+      "http://localhost:3000"
+    ).replace(/\/$/, "");
 
     const isValid = await this.sslcommerzService.validatePayment(val_id || "");
 
     if (isValid) {
       await this.orderService.updatePaymentStatus(transactionId, "PAID", body);
-      return { success: true, status: "PAID", transactionId };
+      return res.redirect(
+        `${frontendUrl}/checkout/success?tran_id=${encodeURIComponent(transactionId)}`,
+      );
     } else {
       await this.orderService.updatePaymentStatus(
         transactionId,
         "FAILED",
         body,
       );
-      throw new BadRequestException("Payment validation failed");
+      return res.redirect(
+        `${frontendUrl}/checkout/failed?tran_id=${encodeURIComponent(transactionId)}&error=validation_failed`,
+      );
     }
   }
 
@@ -88,16 +100,25 @@ export class OrderController {
   async paymentFail(
     @Body() body: SSLCommerzPaymentDetails,
     @Query("tran_id") tran_id: string,
+    @Res() res: Response,
   ) {
     const transactionId = tran_id || body?.tran_id;
     await this.orderService.updatePaymentStatus(transactionId, "FAILED", body);
-    return { success: false, status: "FAILED", transactionId };
+    const frontendUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.FRONTEND_BASE_URL ||
+      "http://localhost:3000"
+    ).replace(/\/$/, "");
+    return res.redirect(
+      `${frontendUrl}/checkout/failed?tran_id=${encodeURIComponent(transactionId)}`,
+    );
   }
 
   @Post("payment/sslcommerz/cancel")
   async paymentCancel(
     @Body() body: SSLCommerzPaymentDetails,
     @Query("tran_id") tran_id: string,
+    @Res() res: Response,
   ) {
     const transactionId = tran_id || body?.tran_id;
     await this.orderService.updatePaymentStatus(
@@ -105,7 +126,14 @@ export class OrderController {
       "CANCELLED",
       body,
     );
-    return { success: false, status: "CANCELLED", transactionId };
+    const frontendUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.FRONTEND_BASE_URL ||
+      "http://localhost:3000"
+    ).replace(/\/$/, "");
+    return res.redirect(
+      `${frontendUrl}/checkout/cancel?tran_id=${encodeURIComponent(transactionId)}`,
+    );
   }
 
   @Post("payment/sslcommerz/ipn")

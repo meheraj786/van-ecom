@@ -6,7 +6,7 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  const rawOrigins = process.env.FRONTEND_URL || "";
+  const rawOrigins = process.env.FRONTEND_URL || "http://localhost:3000";
   const allowedOrigins = rawOrigins
     .split(",")
     .map((o) => o.trim().replace(/\/$/, ""))

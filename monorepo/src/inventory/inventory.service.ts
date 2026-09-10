@@ -56,11 +56,38 @@ export class InventoryService {
     const limit = Number(query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const where = query.variantId
-      ? {
-          variantId: query.variantId,
-        }
-      : {};
+    const search = query.search?.trim();
+    const where = {
+      ...(query.variantId ? { variantId: query.variantId } : {}),
+      ...(query.status === "IN_STOCK"
+        ? { quantityRemaining: { gt: 0 } }
+        : query.status === "SOLD_OUT"
+          ? { quantityRemaining: { lte: 0 } }
+          : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                batchNumber: { contains: search, mode: "insensitive" as const },
+              },
+              { note: { contains: search, mode: "insensitive" as const } },
+              { variantId: { contains: search, mode: "insensitive" as const } },
+              {
+                variant: {
+                  sku: { contains: search, mode: "insensitive" as const },
+                },
+              },
+              {
+                variant: {
+                  product: {
+                    name: { contains: search, mode: "insensitive" as const },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
 
     const [totalStocks, stocks] = await Promise.all([
       this.prisma.stockBatch.count({ where }),

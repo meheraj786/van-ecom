@@ -1,10 +1,18 @@
-import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsNumber, IsOptional, IsString, Min } from "class-validator";
+import { Type } from "class-transformer";
 
 export class GetStocksQueryDto {
   @IsOptional()
   @IsString()
   variantId?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: "ALL" | "IN_STOCK" | "SOLD_OUT";
 
   @IsOptional()
   @Type(() => Number)

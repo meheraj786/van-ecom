@@ -1,0 +1,931 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  InternalServerErrorException,
+  Param,
+  Post,
+  Put,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import type { Response } from 'express';
+import { AppService } from './app.service';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { AdminGuard } from './common/guards/admin.guard';
+import {
+  AddBatchDto,
+  AddToCartDto,
+  CalculateFifoDto,
+  CreateCategoryDto,
+  CreateContactMessageDto,
+  CreateCouponDto,
+  CreateDivisionDto,
+  CreateOrderDto,
+  CreateProductDto,
+  CreateSubCategoryDto,
+  CreateVariantDto,
+  GetProductsQueryDto,
+  GetStocksQueryDto,
+  LoginDto,
+  PaginationQueryDto,
+  RegisterUserDto,
+  RegisterVendorDto,
+  UpdateAccountDto,
+  UpdateCartQuantityDto,
+  UpdateCouponDto,
+  UpdateDivisionDto,
+  UpdateProductDto,
+  UpdateThemeDto,
+  UpdateVariantDto,
+  ValidateCouponDto,
+} from './dto/gateway.dto';
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get('auth/google')
+  googleAuth(@Res() res: Response) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+
+    if (!clientId) {
+      throw new InternalServerErrorException(
+        'GOOGLE_CLIENT_ID is not configured',
+      );
+    }
+
+    const backendUrl = process.env.BACKEND_GATEWAY_URL || 'http://localhost';
+    const redirectUri = `${backendUrl.replace(/\/$/, '')}/auth/google/callback`;
+    const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=consent`;
+
+    return res.redirect(googleAuthUrl);
+  }
+
+  @Get('auth/google/callback')
+  async googleAuthCallback(
+    @Query('code') code: string,
+    @Query('error') googleError: string,
+    @Res() res: Response,
+  ) {
+    const frontendUrl = (
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+
+    if (googleError || !code) {
+      return res.redirect(`${frontendUrl}/login?error=GoogleAccessDenied`);
+    }
+
+    try {
+      const backendUrl = process.env.BACKEND_GATEWAY_URL || 'http://localhost';
+      const redirectUri = `${backendUrl.replace(/\/$/, '')}/auth/google/callback`;
+
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: process.env.GOOGLE_CLIENT_ID || '',
+          client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+        }),
+      });
+
+      const tokenData = await tokenRes.json();
+
+      if (!tokenRes.ok || !tokenData.access_token) {
+        return res.redirect(
+          `${frontendUrl}/login?error=GoogleTokenExchangeFailed`,
+        );
+      }
+
+      const profileRes = await fetch(
+        'https://www.googleapis.com/oauth2/v3/userinfo',
+        {
+          headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        },
+      );
+
+      const profile = await profileRes.json();
+
+      if (!profile || !profile.email) {
+        return res.redirect(
+          `${frontendUrl}/login?error=GoogleProfileFetchFailed`,
+        );
+      }
+
+      const result: any = await this.appService.rpcCall(
+        this.appService.userService.googleAuth({
+          googleId: profile.sub,
+          email: profile.email,
+          name: profile.name || profile.email.split('@')[0],
+          avatar: profile.picture,
+        }),
+      );
+
+      res.cookie('token', result.token, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+
+      const userJson = encodeURIComponent(JSON.stringify(result.user));
+      return res.redirect(
+        `${frontendUrl}/auth/success?token=${result.token}&user=${userJson}`,
+      );
+    } catch {
+      return res.redirect(`${frontendUrl}/login?error=GoogleAuthFailed`);
+    }
+  }
+
+  @Post('auth/register')
+  registerUser(@Body() dto: RegisterUserDto) {
+    return this.appService.rpcCall(
+      this.appService.userService.registerUser(dto),
+    );
+  }
+
+  @Post('auth/login')
+  async loginUser(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result: any = await this.appService.rpcCall(
+      this.appService.userService.loginUser(dto),
+    );
+
+    response.cookie('token', result.token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    return { message: result.message, user: result.user };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('auth/me')
+  getMe(@Req() req: any) {
+    return {
+      user: {
+        id: req.user.userId || req.user.id || req.user.sub,
+        email: req.user.email,
+        name: req.user.name,
+        role: req.user.role || 'USER',
+      },
+    };
+  }
+
+  @Post('auth/vendor/register')
+  registerVendor(@Body() dto: RegisterVendorDto) {
+    return this.appService.rpcCall(
+      this.appService.userService.registerVendor(dto),
+    );
+  }
+
+  @Post('auth/vendor/login')
+  async loginVendor(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result: any = await this.appService.rpcCall(
+      this.appService.userService.loginVendor(dto),
+    );
+
+    response.cookie('token', result.token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    return { message: result.message, vendor: result.vendor };
+  }
+
+  @Post('auth/logout')
+  logout(@Res({ passthrough: true }) response: Response) {
+    response.clearCookie('token', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+    });
+    return { message: 'Logged out successfully' };
+  }
+
+  @Get('theme')
+  getTheme() {
+    return this.appService.rpcCall(this.appService.themeService.getTheme());
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('theme')
+  updateTheme(@Body() dto: UpdateThemeDto) {
+    return this.appService.rpcCall(
+      this.appService.themeService.updateTheme(dto),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('theme/reset')
+  resetTheme() {
+    return this.appService.rpcCall(this.appService.themeService.resetTheme());
+  }
+
+  @Post('chat/conversation')
+  getOrCreateConversation(
+    @Req() req: any,
+    @Body('senderId') bodySenderId: string,
+    @Body('targetUserId') targetUserId: string,
+  ) {
+    const currentUserId =
+      req.user?.userId || req.user?.id || bodySenderId || 'GUEST';
+    return this.appService.rpcCall(
+      this.appService.chatService.getOrCreateConversation({
+        userA: currentUserId,
+        userB: targetUserId || 'ADMIN',
+      }),
+    );
+  }
+
+  @Get('chat/conversations')
+  getUserConversations(@Req() req: any, @Query('userId') queryUserId: string) {
+    const userId = req.user?.userId || req.user?.id || queryUserId || 'ADMIN';
+    return this.appService.rpcCall(
+      this.appService.chatService.getUserConversations(userId),
+    );
+  }
+
+  @Get('chat/messages/:conversationId')
+  getConversationMessages(
+    @Param('conversationId') conversationId: string,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.appService.rpcCall(
+      this.appService.chatService.getConversationMessages({
+        conversationId,
+        query,
+      }),
+    );
+  }
+
+  @Post('chat/read')
+  markChatAsRead(
+    @Req() req: any,
+    @Body('conversationId') conversationId: string,
+    @Body('userId') bodyUserId: string,
+  ) {
+    const userId = req.user?.userId || req.user?.id || bodyUserId || 'GUEST';
+    return this.appService.rpcCall(
+      this.appService.chatService.markAsRead({ conversationId, userId }),
+    );
+  }
+
+  @Get('account/:vendorId')
+  getStoreSettings(@Param('vendorId') vendorId: string) {
+    return this.appService.rpcCall(
+      this.appService.userService.getSettings({ vendorId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('account/update')
+  updateStoreSettings(@Req() req: any, @Body() dto: UpdateAccountDto) {
+    const vendorId = req.user.userId as string;
+    return this.appService.rpcCall(
+      this.appService.userService.updateSettings({ vendorId, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('customer')
+  getCustomers(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.customerService.getCustomers(query),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('customer/:id')
+  getCustomerById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.customerService.getCustomerById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('customer')
+  createCustomer(@Body() dto: any) {
+    return this.appService.rpcCall(
+      this.appService.customerService.createCustomer(dto),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('customer/:id')
+  updateCustomer(@Param('id') id: string, @Body() dto: any) {
+    return this.appService.rpcCall(
+      this.appService.customerService.updateCustomer({ id, payload: dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('customer/:id')
+  deleteCustomer(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.customerService.deleteCustomer({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('product/category')
+  createCategory(@Body() dto: CreateCategoryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.createCategory(dto),
+    );
+  }
+
+  @Get('product/categories')
+  getCategories(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.getCategories(query),
+    );
+  }
+
+  @Get('product/category/:id')
+  getCategoryById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.getCategoryById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('product/category/:id')
+  updateCategory(@Param('id') id: string, @Body() dto: CreateCategoryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.updateCategory({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('product/category/:id')
+  deleteCategory(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.deleteCategory({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('product/subcategory')
+  createSubCategory(@Body() dto: CreateSubCategoryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.createSubCategory(dto),
+    );
+  }
+
+  @Get('product/subcategories')
+  getSubCategories(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.getSubCategories(query),
+    );
+  }
+
+  @Get('product/subcategory/:id')
+  getSubCategoryById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.getSubCategoryById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('product/subcategory/:id')
+  updateSubCategory(
+    @Param('id') id: string,
+    @Body() dto: CreateSubCategoryDto,
+  ) {
+    return this.appService.rpcCall(
+      this.appService.productService.updateSubCategory({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('product/subcategory/:id')
+  deleteSubCategory(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.deleteSubCategory({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('product')
+  createProduct(@Body() dto: CreateProductDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.createProduct(dto),
+    );
+  }
+
+  @Get('product')
+  getProducts(@Query() query: GetProductsQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.getProducts(query),
+    );
+  }
+
+  @Get('product/id/:id')
+  getProductById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.getProductById({ id }),
+    );
+  }
+
+  @Get('product/:slug')
+  getProductBySlug(@Param('slug') slug: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.getProductBySlug({ slug }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('product/:id')
+  updateProduct(@Param('id') id: string, @Body() dto: UpdateProductDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.updateProduct({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('product/:id')
+  deleteProduct(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.deleteProduct({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('product/:id/variant')
+  createVariant(@Param('id') id: string, @Body() dto: CreateVariantDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.createVariant({ id, ...dto }),
+    );
+  }
+
+  @Get('product/:id/variants')
+  getVariantsByProduct(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.getVariantsByProduct({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('product/variant/:id')
+  updateVariant(@Param('id') id: string, @Body() dto: UpdateVariantDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.updateVariant({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('product/variant/:id')
+  deleteVariant(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.productService.deleteVariant({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('review')
+  createReview(@Req() req: any, @Body() dto: any) {
+    const user = req.user;
+    const rawToken = req.cookies?.token || req.headers.authorization || '';
+
+    return this.appService.rpcCall(
+      this.appService.productService.createReview(dto, {
+        Authorization: rawToken.startsWith('Bearer ')
+          ? rawToken
+          : `Bearer ${rawToken}`,
+        Cookie: `token=${rawToken}`,
+        'x-user-id': user.userId || user.id,
+        'x-user-name': user.name || 'Customer',
+        'x-user-role': user.role || 'USER',
+      }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('review')
+  getAllReviews(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.productService.getAllReviews(query),
+    );
+  }
+
+  @Get('review/product/:productId')
+  getReviewsByProduct(
+    @Param('productId') productId: string,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.appService.rpcCall(
+      this.appService.productService.getReviewsByProduct({ productId, query }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('review/my-reviews')
+  getMyReviews(@Req() req: any, @Query() query: PaginationQueryDto) {
+    const userId = req.user.userId || req.user.id;
+    return this.appService.rpcCall(
+      this.appService.productService.getReviewsByUser({ userId, query }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put('review/:id')
+  updateReview(@Req() req: any, @Param('id') id: string, @Body() dto: any) {
+    const user = req.user;
+    const rawToken = req.cookies?.token || req.headers.authorization || '';
+
+    return this.appService.rpcCall(
+      this.appService.productService.updateReview(
+        { id, payload: dto },
+        {
+          Authorization: rawToken.startsWith('Bearer ')
+            ? rawToken
+            : `Bearer ${rawToken}`,
+          Cookie: `token=${rawToken}`,
+          'x-user-id': user.userId || user.id,
+        },
+      ),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('review/:id')
+  deleteReview(@Req() req: any, @Param('id') id: string) {
+    const user = req.user;
+    const rawToken = req.cookies?.token || req.headers.authorization || '';
+
+    return this.appService.rpcCall(
+      this.appService.productService.deleteReview(
+        { id },
+        {
+          Authorization: rawToken.startsWith('Bearer ')
+            ? rawToken
+            : `Bearer ${rawToken}`,
+          Cookie: `token=${rawToken}`,
+          'x-user-id': user.userId || user.id,
+          'x-user-role': user.role || 'USER',
+        },
+      ),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('cart')
+  getCart(@Req() req: any) {
+    const userId = req.user?.userId || req.user?.id || req.user?.sub;
+    return this.appService.rpcCall(
+      this.appService.cartService.getCart({ userId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('cart/add')
+  addToCart(@Req() req: any, @Body() dto: AddToCartDto) {
+    const userId = req.user?.userId || req.user?.id || req.user?.sub;
+    return this.appService.rpcCall(
+      this.appService.cartService.addToCart({ ...dto, userId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put('cart/update-quantity')
+  updateCartQuantity(@Req() req: any, @Body() dto: UpdateCartQuantityDto) {
+    const userId = req.user?.userId || req.user?.id || req.user?.sub;
+    return this.appService.rpcCall(
+      this.appService.cartService.updateQuantity({ ...dto, userId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('cart/:variantId')
+  removeFromCart(@Req() req: any, @Param('variantId') variantId: string) {
+    const userId = req.user?.userId || req.user?.id || req.user?.sub;
+    return this.appService.rpcCall(
+      this.appService.cartService.removeFromCart({ userId, variantId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('cart')
+  clearCart(@Req() req: any) {
+    const userId = req.user?.userId || req.user?.id || req.user?.sub;
+    return this.appService.rpcCall(
+      this.appService.cartService.clearCart({ userId }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('inventory/batch')
+  addInventoryBatch(@Body() dto: AddBatchDto) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.addBatch(dto),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('inventory/batch/:id')
+  updateInventoryBatch(@Param('id') id: string, @Body() dto: any) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.updateBatch({ id, payload: dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('inventory/batch/:id')
+  deleteInventoryBatch(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.deleteBatch({ id }),
+    );
+  }
+
+  @Get('inventory/stocks')
+  getStocks(@Query() query: GetStocksQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.getStocks(query),
+    );
+  }
+
+  @Get('inventory/summary/:variantId')
+  getVariantStockSummary(@Param('variantId') variantId: string) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.getVariantStockSummary({ variantId }),
+    );
+  }
+
+  @Post('inventory/fifo-price')
+  calculateFifoPrice(@Body() dto: CalculateFifoDto) {
+    return this.appService.rpcCall(
+      this.appService.inventoryService.calculateFifoPrice(dto),
+    );
+  }
+
+  @Post('order')
+  createOrder(@Req() req: any, @Body() dto: CreateOrderDto) {
+    const userId = req.user?.userId || dto.customerId || 'GUEST';
+    return this.appService.rpcCall(
+      this.appService.orderService.createOrder({
+        userId,
+        ...dto,
+      }),
+    );
+  }
+
+  @Post('order/payment/sslcommerz/success')
+  async sslcommerzSuccess(
+    @Body() body: any,
+    @Query() query: any,
+    @Res() res: Response,
+  ) {
+    const tran_id = query.tran_id || body.tran_id;
+    const frontendUrl = (
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+
+    try {
+      await this.appService.rpcCall(
+        this.appService.orderService.sslcommerzSuccess(body, query),
+      );
+      return res.redirect(`${frontendUrl}/checkout/success?tran_id=${tran_id}`);
+    } catch {
+      return res.redirect(
+        `${frontendUrl}/checkout/failed?tran_id=${tran_id}&error=validation_failed`,
+      );
+    }
+  }
+
+  @Post('order/payment/sslcommerz/fail')
+  async sslcommerzFail(
+    @Body() body: any,
+    @Query() query: any,
+    @Res() res: Response,
+  ) {
+    const tran_id = query.tran_id || body.tran_id;
+    const frontendUrl = (
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+
+    try {
+      await this.appService.rpcCall(
+        this.appService.orderService.sslcommerzFail(body, query),
+      );
+    } catch {}
+
+    return res.redirect(`${frontendUrl}/checkout/failed?tran_id=${tran_id}`);
+  }
+
+  @Post('order/payment/sslcommerz/cancel')
+  async sslcommerzCancel(
+    @Body() body: any,
+    @Query() query: any,
+    @Res() res: Response,
+  ) {
+    const tran_id = query.tran_id || body.tran_id;
+    const frontendUrl = (
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+
+    try {
+      await this.appService.rpcCall(
+        this.appService.orderService.sslcommerzCancel(body, query),
+      );
+    } catch {}
+
+    return res.redirect(`${frontendUrl}/checkout/cancel?tran_id=${tran_id}`);
+  }
+
+  @Post('order/payment/sslcommerz/ipn')
+  sslcommerzIPN(@Body() body: any, @Query() query: any) {
+    return this.appService.rpcCall(
+      this.appService.orderService.sslcommerzIPN(body, query),
+    );
+  }
+
+  @Get('order/track/:id')
+  trackOrder(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.orderService.getOrderById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('order')
+  getOrders(
+    @Req() req: any,
+    @Query() query: PaginationQueryDto & { all?: string },
+  ) {
+    const isAdmin = req.user?.role === 'ADMIN';
+    const isAllRequested = query.all === 'true';
+    const userId =
+      isAdmin || isAllRequested ? undefined : (req.user?.userId as string);
+
+    return this.appService.rpcCall(
+      this.appService.orderService.getOrders({ userId, ...query }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('order/single/:id')
+  getOrderById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.orderService.getOrderById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('order/:id/status')
+  updateOrderStatus(@Param('id') id: string, @Body('status') status: string) {
+    return this.appService.rpcCall(
+      this.appService.orderService.updateOrderStatus({ id, status }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('order/coupon')
+  createCoupon(@Body() dto: CreateCouponDto) {
+    return this.appService.rpcCall(
+      this.appService.orderService.createCoupon(dto),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('order/coupon')
+  getCoupons(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.orderService.getCoupons(query),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('order/coupon/:id')
+  getCouponById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.orderService.getCouponById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('order/coupon/:id')
+  updateCoupon(@Param('id') id: string, @Body() dto: UpdateCouponDto) {
+    return this.appService.rpcCall(
+      this.appService.orderService.updateCoupon({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('order/coupon/:id')
+  deleteCoupon(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.orderService.deleteCoupon({ id }),
+    );
+  }
+
+  @Post('order/coupon/validate')
+  validateCoupon(
+    @Req() req: any,
+    @Query('userId') queryUserId: string,
+    @Body() dto: ValidateCouponDto,
+  ) {
+    const userId = req.user?.userId || queryUserId || 'GUEST';
+    return this.appService.rpcCall(
+      this.appService.orderService.validateCouponForUser({
+        userId,
+        code: dto.code,
+        items: dto.items,
+      }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('order/division')
+  createDivision(@Body() dto: CreateDivisionDto) {
+    return this.appService.rpcCall(
+      this.appService.divisionService.createDivision(dto),
+    );
+  }
+
+  @Get('order/divisions')
+  getAllDivisions() {
+    return this.appService.rpcCall(
+      this.appService.divisionService.getAllDivisions(),
+    );
+  }
+
+  @Get('order/division/:id')
+  getDivisionById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.divisionService.getDivisionById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('order/division/:id')
+  updateDivision(@Param('id') id: string, @Body() dto: UpdateDivisionDto) {
+    return this.appService.rpcCall(
+      this.appService.divisionService.updateDivision({ id, ...dto }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('order/division/:id')
+  deleteDivision(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.divisionService.deleteDivision({ id }),
+    );
+  }
+
+  @Post('contact-message')
+  createContactMessage(@Body() dto: CreateContactMessageDto) {
+    return this.appService.rpcCall(
+      this.appService.contactMessageService.createMessage(dto),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('contact-message')
+  getContactMessages(@Query() query: PaginationQueryDto) {
+    return this.appService.rpcCall(
+      this.appService.contactMessageService.getMessages(query),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('contact-message/:id')
+  getContactMessageById(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.contactMessageService.getMessageById({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Put('contact-message/:id/read')
+  markContactMessageAsRead(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.contactMessageService.markAsRead({ id }),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete('contact-message/:id')
+  deleteContactMessage(@Param('id') id: string) {
+    return this.appService.rpcCall(
+      this.appService.contactMessageService.deleteMessage({ id }),
+    );
+  }
+}

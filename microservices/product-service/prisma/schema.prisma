@@ -1,0 +1,157 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Category {
+  id            String            @id @default(cuid())
+  name          String            @unique
+  slug          String            @unique
+  image         String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  subCategories SubCategory[]
+  products      ProductCategory[]
+
+  @@map("categories")
+}
+
+model SubCategory {
+  id         String               @id @default(cuid())
+  name       String
+  slug       String               @unique
+  image      String?
+  categoryId String
+  category   Category             @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  products   ProductSubCategory[]
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@index([categoryId])
+  @@map("subcategories")
+}
+
+model Product {
+  id            String  @id @default(cuid())
+  name          String
+  slug          String  @unique
+  sku           String? @unique
+  baseImage     String?
+  description   String?
+  isActive      Boolean @default(true)
+  isNew         Boolean @default(true)
+  isBestSeller  Boolean @default(false)
+  isFeatured    Boolean @default(false)
+  averageRating Float   @default(0.0)
+
+  categories      ProductCategory[]
+  subCategories   ProductSubCategory[]
+  productOptions  ProductOption[]
+  variants ProductVariant[]
+  reviews         Review[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([isActive])
+  @@map("products")
+}
+
+model ProductOption {  // color, size
+  id                  String               @id @default(cuid())
+  productId           String
+  product             Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name                String
+  productOptionValues ProductOptionValue[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  @@unique([productId, name])
+@@index([productId])
+}
+
+model ProductOptionValue {  // red, small
+  id                   String                @id @default(cuid())
+  optionId             String
+  option               ProductOption         @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  value                String
+  productVariantValues ProductVariantValue[]
+  metadata Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model ProductVariant {  // red small
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  sku                  String
+  images               String[]
+  combinationKey       String
+  productVariantValues ProductVariantValue[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([productId, combinationKey])
+@@unique([sku])
+@@index([productId])
+}
+
+model ProductVariantValue {  // red+small
+  id               String @id @default(cuid())
+  productVariantId String
+  optionValueId    String
+
+  productVariant ProductVariant     @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+  optionValue    ProductOptionValue @relation(fields: [optionValueId], references: [id], onDelete: Cascade)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  @@unique([productVariantId, optionValueId])
+@@index([optionValueId])
+}
+
+model ProductCategory {
+  id         String   @id @default(cuid())
+  productId  String
+  categoryId String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, categoryId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
+
+model ProductSubCategory {
+  id            String      @id @default(cuid())
+  productId     String
+  subCategoryId String
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  subCategory   SubCategory @relation(fields: [subCategoryId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, subCategoryId])
+  @@index([subCategoryId])
+  @@map("product_subcategories")
+}
+
+
+model Review {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  userName  String
+  rating    Int
+  comment   String?
+  images    String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([userId])
+  @@map("reviews")
+}

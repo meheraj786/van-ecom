@@ -1,0 +1,127 @@
+services:
+  redis:
+    image: redis:alpine
+    container_name: ecommerce_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ecommerce-network
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api_gateway
+    environment:
+      - PORT=3000
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - USER_SERVICE_URL=http://user-service:3001
+      - PRODUCT_SERVICE_URL=http://product-service:3002
+      - CART_SERVICE_URL=http://cart-service:3003
+      - INVENTORY_SERVICE_URL=http://inventory-service:3004
+      - ORDER_SERVICE_URL=http://order-service:3005
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - BACKEND_GATEWAY_URL=http://localhost
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      - user-service
+      - product-service
+      - cart-service
+      - inventory-service
+      - order-service
+    networks:
+      - ecommerce-network
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: user_service
+    environment:
+      - PORT=3001
+      - DATABASE_URL=${USER_SERVICE_DB_URL}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+    networks:
+      - ecommerce-network
+
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: product_service
+    environment:
+      - PORT=3002
+      - DATABASE_URL=${PRODUCT_SERVICE_WRITE_DB_URL}
+      - REPLICA_DATABASE_URL=${PRODUCT_SERVICE_READ_DB_URL}
+    networks:
+      - ecommerce-network
+
+  cart-service:
+    build:
+      context: ./cart-service
+      dockerfile: Dockerfile
+    container_name: cart_service
+    environment:
+      - PORT=3003
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - ecommerce-network
+
+  inventory-service:
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile
+    container_name: inventory_service
+    environment:
+      - PORT=3004
+      - DATABASE_URL=${INVENTORY_SERVICE_DB_URL}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CART_SERVICE_URL=http://cart-service:3003
+    networks:
+      - ecommerce-network
+
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order_service
+    environment:
+      - PORT=3005
+      - DATABASE_URL=${ORDER_SERVICE_DB_URL}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CART_SERVICE_URL=http://cart-service:3003
+      - INVENTORY_SERVICE_URL=http://inventory-service:3004
+      - PRODUCT_SERVICE_URL=http://product-service:3002
+      - SSLCOMMERZ_STORE_ID=testbox
+      - SSLCOMMERZ_STORE_PASSWORD=qwerty
+      - SSLCOMMERZ_INIT_URL=https://sandbox.sslcommerz.com/gwprocess/v4/api.php
+      - SSLCOMMERZ_VALIDATION_URL=https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php
+      - BACKEND_BASE_URL=http://localhost
+      - FRONTEND_BASE_URL=http://localhost:3000
+    depends_on:
+      - redis
+      - product-service
+      - inventory-service
+      - cart-service
+    networks:
+      - ecommerce-network
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: global_gateway
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - ecommerce-network
+
+networks:
+  ecommerce-network:
+    driver: bridge
